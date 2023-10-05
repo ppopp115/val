@@ -1153,6 +1153,7 @@
 
             settings.fda = infos.fda;
             settings.cdrom = infos.cdrom;
+            settings.wants_cdrom = infos.wants_cdrom;
             settings.hda = infos.hda;
             settings.multiboot = infos.multiboot;
             settings.bzimage = infos.bzimage;
@@ -1363,6 +1364,8 @@
         const disable_audio = settings.audio === undefined ? $("disable_audio").checked : !settings.audio;
         const enable_acpi = settings.acpi === undefined ? $("enable_acpi").checked : settings.acpi;
 
+        const wants_cdrom = settings.wants_cdrom === undefined ? $("wants_cdrom").checked : settings.wants_cdrom;
+
         /** @const */
         var BIOSPATH = "bios/";
 
@@ -1409,6 +1412,7 @@
             "hda": settings.hda,
             "hdb": settings.hdb,
             "cdrom": settings.cdrom,
+            "wants_cdrom": settings.wants_cdrom,
 
             "multiboot": settings.multiboot,
             "bzimage": settings.bzimage,
