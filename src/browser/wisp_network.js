@@ -176,8 +176,8 @@ function WispNetworkAdapter(wisp_url, bus, config)
 
 WispNetworkAdapter.prototype.destroy = function()
 {
-    if (this.wispws)
-        this.wispws.close()
+    if(this.wispws)
+        this.wispws.close();
 };
 
 // https://stackoverflow.com/questions/4460586/javascript-regular-expression-to-check-for-ip-addresses
