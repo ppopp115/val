@@ -1,129 +1,4 @@
 "use strict";
-let wispws;
-
-let lastStream = 1;
-
-const connections = {0: {congestion: 0}};
-
-const congestedBuffer = [];
-function sendPacket(data, type, streamID) {
-    if(connections[streamID].congestion > 0) {
-        if(type === "DATA")
-            connections[streamID].congestion--;
-        wispws.send(data);
-    } else {
-        connections[streamID].congested = true;
-        congestedBuffer.push({data: data, type: type});
-    }
-}
-
-function processIncomingWispFrame(frame) {
-    // console.log(frame);
-    const view = new DataView(frame.buffer);
-    const streamID = view.getUint32(1, true);
-    switch(frame[0]) {
-        case 1: // CONNECT
-            // The server should never send this actually
-            throw new Error("Server sent client only frame: CONNECT 0x01");
-            break;
-        case 2: // DATA
-            if(connections[streamID])
-                connections[streamID].dataCallback(frame.slice(5));
-            else
-                throw new Error("Got a DATA packet but stream not registered. ID: " + streamID);
-
-
-            break;
-        case 3: // CONTINUE
-            if(connections[streamID]) {
-                connections[streamID].congestion = view.getUint32(5, true);
-            }
-
-            if(connections[streamID].congested) {
-                for(const packet of congestedBuffer) {
-                    sendPacket(packet.data, packet.type, streamID);
-                }
-                connections[streamID].congested = false;
-            }
-
-            break;
-        case 4: // CLOSE
-            if(connections[streamID])
-                connections[streamID].closeCallback(view.getUint8(5));
-            delete connections[streamID];
-            break;
-    }
-}
-
-
-// FrameObj will be the following
-// FrameObj.streamID (number)
-//
-// FrameObj.type -- CONNECT
-//      FrameObj.hostname (string)
-//      FrameObj.port (number)
-//      FrameObj.dataCallback (function (Uint8Array))
-//      FrameObj.closeCallback (function (number)) OPTIONAL
-//
-//
-// FrameObj.type -- DATA
-//      FrameObj.data (Uint8Array)
-//
-// FrameObj.type -- CLOSE
-//      FrameObj.reason (number)
-//
-// FrameObj.type -- RESIZE
-//      FrameObj.cols (number)
-//      FrameObj.rows (number)
-//
-//
-//
-
-function sendWispFrame(frameObj) {
-
-    let fullPacket;
-    let view;
-    switch(frameObj.type) {
-        case "CONNECT":
-            const hostnameBuffer = new TextEncoder().encode(frameObj.hostname);
-            fullPacket = new Uint8Array(5 + 1 + 2 + hostnameBuffer.length);
-            view = new DataView(fullPacket.buffer);
-            view.setUint8(0, 0x01);                     // TYPE
-            view.setUint32(1, frameObj.streamID, true); // Stream ID
-            view.setUint8(5, 0x01);                     // TCP
-            view.setUint16(6, frameObj.port, true);     // PORT
-            fullPacket.set(hostnameBuffer, 8);          // hostname
-
-            // Setting callbacks
-            connections[frameObj.streamID] = {
-                dataCallback: frameObj.dataCallback,
-                closeCallback: frameObj.closeCallback,
-                congestion: connections[0].congestion
-            };
-
-
-            break;
-        case "DATA":
-
-            fullPacket = new Uint8Array(5 + frameObj.data.length);
-            view = new DataView(fullPacket.buffer);
-            view.setUint8(0, 0x02);                     // TYPE
-            view.setUint32(1, frameObj.streamID, true); // Stream ID
-            fullPacket.set(frameObj.data, 5);           // Actual data
-
-            break;
-        case "CLOSE":
-            fullPacket = new Uint8Array(5 + 1);
-            view = new DataView(fullPacket.buffer);
-            view.setUint8(0, 0x04);                     // TYPE
-            view.setUint32(1, frameObj.streamID, true); // Stream ID
-            view.setUint8(5, frameObj.reason);          // Packet size
-
-            break;
-
-    }
-    sendPacket(fullPacket, frameObj.type, frameObj.streamID);
-}
 
 /**
  * @constructor
@@ -131,22 +6,152 @@ function sendWispFrame(frameObj) {
  * @param {BusConnector} bus
  * @param {*=} config
  */
-function WispNetworkAdapter(wispURL, bus, config)
+function WispNetworkAdapter(wisp_url, bus, config)
 {
-    const registerWS = function() {
-        wispws = new WebSocket(wispURL.replace("wisp://", "ws://").replace("wisps://", "wss://"));
-        wispws.binaryType = "arraybuffer";
-        wispws.onmessage = (event) => {
-            processIncomingWispFrame(new Uint8Array(event.data));
+    this.last_stream = 1;
+
+    this.connections = {0: {congestion: 0}};
+
+    this.congested_buffer = [];
+    this.send_packet = (data, type, stream_id) => {
+        if(this.connections[stream_id].congestion > 0) {
+            if(type === "DATA") {
+                this.connections[stream_id].congestion--;
+            }
+            this.wispws.send(data);
+        } else {
+            this.connections[stream_id].congested = true;
+            this.congested_buffer.push({data: data, type: type});
+        }
+    };
+
+    this.process_incoming_wisp_frame = (frame) => {
+        const view = new DataView(frame.buffer);
+        const stream_id = view.getUint32(1, true);
+        switch(frame[0]) {
+            case 1: // CONNECT
+                // The server should never send this actually
+                dbg_log("Server sent client-only packet CONNECT", LOG_NET);
+                break;
+            case 2: // DATA
+                if(this.connections[stream_id])
+                    this.connections[stream_id].data_callback(frame.slice(5));
+                else
+                    throw new Error("Got a DATA packet but stream not registered. ID: " + stream_id);
+
+
+                break;
+            case 3: // CONTINUE
+                if(this.connections[stream_id]) {
+                    this.connections[stream_id].congestion = view.getUint32(5, true);
+                }
+
+                if(this.connections[stream_id].congested) {
+                    for(const packet of this.congested_buffer) {
+                        this.send_packet(packet.data, packet.type, stream_id);
+                    }
+                    this.connections[stream_id].congested = false;
+                }
+
+                break;
+            case 4: // CLOSE
+                if(this.connections[stream_id])
+                    this.connections[stream_id].close_callback(view.getUint8(5));
+                delete this.connections[stream_id];
+                break;
+            case 5: // PROTOEXT
+                // Not responding, this is wisp v1 client not wisp v2;
+                break;
+            default:
+                dbg_log("Wisp server returned unknown packet: " + frame[0], LOG_NET);
+        }
+    };
+
+
+    // FrameObj will be the following
+    // FrameObj.stream_id (number)
+    //
+    // FrameObj.type -- CONNECT
+    //      FrameObj.hostname (string)
+    //      FrameObj.port (number)
+    //      FrameObj.data_callback (function (Uint8Array))
+    //      FrameObj.close_callback (function (number)) OPTIONAL
+    //
+    //
+    // FrameObj.type -- DATA
+    //      FrameObj.data (Uint8Array)
+    //
+    // FrameObj.type -- CLOSE
+    //      FrameObj.reason (number)
+    //
+    // FrameObj.type -- RESIZE
+    //      FrameObj.cols (number)
+    //      FrameObj.rows (number)
+    //
+    //
+    //
+
+    this.send_wisp_frame = (frame_obj) => {
+
+        let full_packet;
+        let view;
+        switch(frame_obj.type) {
+            case "CONNECT":
+                const hostname_buffer = new TextEncoder().encode(frame_obj.hostname);
+                full_packet = new Uint8Array(5 + 1 + 2 + hostname_buffer.length);
+                view = new DataView(full_packet.buffer);
+                view.setUint8(0, 0x01);                     // TYPE
+                view.setUint32(1, frame_obj.stream_id, true); // Stream ID
+                view.setUint8(5, 0x01);                     // TCP
+                view.setUint16(6, frame_obj.port, true);     // PORT
+                full_packet.set(hostname_buffer, 8);          // hostname
+
+                // Setting callbacks
+                this.connections[frame_obj.stream_id] = {
+                    data_callback: frame_obj.data_callback,
+                    close_callback: frame_obj.close_callback,
+                    congestion: this.connections[0].congestion
+                };
+
+
+                break;
+            case "DATA":
+
+                full_packet = new Uint8Array(5 + frame_obj.data.length);
+                view = new DataView(full_packet.buffer);
+                view.setUint8(0, 0x02);                     // TYPE
+                view.setUint32(1, frame_obj.stream_id, true); // Stream ID
+                full_packet.set(frame_obj.data, 5);           // Actual data
+
+                break;
+            case "CLOSE":
+                full_packet = new Uint8Array(5 + 1);
+                view = new DataView(full_packet.buffer);
+                view.setUint8(0, 0x04);                     // TYPE
+                view.setUint32(1, frame_obj.stream_id, true); // Stream ID
+                view.setUint8(5, frame_obj.reason);          // Packet size
+
+                break;
+            default:
+                dbg_log("Client tried to send unknown packet: " + frame_obj.type, LOG_NET);
+
+        }
+        this.send_packet(full_packet, frame_obj.type, frame_obj.stream_id);
+    };
+    const register_ws = () => {
+        this.wispws = new WebSocket(wisp_url.replace("wisp://", "ws://").replace("wisps://", "wss://"));
+        this.wispws.binaryType = "arraybuffer";
+        this.wispws.onmessage = (event) => {
+            this.process_incoming_wisp_frame(new Uint8Array(event.data));
         };
-        wispws.onerror = () => {
-            registerWS();
+        this.wispws.onerror = () => {
+            register_ws();
         };
-        wispws.onclose = () => {
-            registerWS();
+        this.wispws.onclose = () => {
+            register_ws();
         };
     };
-    registerWS();
+    register_ws();
     config = config || {};
     this.bus = bus;
     this.id = config.id || 0;
@@ -172,21 +177,20 @@ WispNetworkAdapter.prototype.destroy = function()
 };
 
 // https://stackoverflow.com/questions/4460586/javascript-regular-expression-to-check-for-ip-addresses
-function validateIPaddress(ipaddress) {
+function validate_IP_address(ipaddress) {
     if(/^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(ipaddress)) {
-      return true;
+    return true;
     }
     return false;
 }
 
 // DNS over HTTPS fetch, recursively fetch the A record until the first result is an IPv4
 async function dohdns(q) {
-    const prefered_fetch = (window.anura?.net?.fetch) || fetch;
-    const req = await prefered_fetch(`https://dns.google/resolve?name=${q.name.join(".")}&type=${q.type}`);
+    const req = await fetch(`https://dns.google/resolve?name=${q.name.join(".")}&type=${q.type}`,  {headers: [["accept", "application/dns-json"]]});
     if(req.status === 200) {
         const res = await req.json();
         if(res.Answer) {
-            if(validateIPaddress(res.Answer[0].data)) {
+            if(validate_IP_address(res.Answer[0].data)) {
                 return res;
             } else {
                 return await dohdns({name: res.Answer[0].data.split("."), type: q.type});
@@ -215,10 +219,8 @@ async function dohdns(q) {
             ]
         };
     } else {
-        throw new Error("DNS Server returned error code");
+        dbg_log("DNS Server returned error code: " + await req.text(), LOG_NET);
     }
-
-
 }
 
 /**
@@ -249,25 +251,23 @@ WispNetworkAdapter.prototype.send = function(data)
             if(this.tcp_conn[tuple]) {
                 dbg_log("SYN to already opened port", LOG_FETCH);
             }
-
             this.tcp_conn[tuple] = new TCPConnection();
             this.tcp_conn[tuple].state = TCP_STATE_SYN_RECEIVED;
             this.tcp_conn[tuple].net = this;
+            this.tcp_conn[tuple].send_wisp_frame = this.send_wisp_frame;
             this.tcp_conn[tuple].on_data = TCPConnection.prototype.on_data_wisp;
             this.tcp_conn[tuple].tuple = tuple;
-            this.tcp_conn[tuple].streamID = lastStream++;
+            this.tcp_conn[tuple].stream_id = this.last_stream++;
             const deref = this.tcp_conn[tuple];
-            sendWispFrame({
+            this.send_wisp_frame({
                 type: "CONNECT",
-                streamID: deref.streamID,
+                stream_id: deref.stream_id,
                 hostname: packet.ipv4.dest.join("."),
                 port: packet.tcp.dport,
-                dataCallback: (data) => {
-                    // console.log("Sending back data: ");
-                    // console.log(data);
+                data_callback: (data) => {
                     deref.write(data);
                 },
-                closeCallback: (data) => {
+                close_callback: (data) => {
                     deref.close();
                 }
             });
@@ -516,8 +516,8 @@ WispNetworkAdapter.prototype.tcp_connect = function(dport)
 
     let conn = new TCPConnection();
     conn.net = this;
-    conn.on_data = function(data) { if(reader) reader.call(handle, data); };
-    conn.on_connect = function() { if(connector) connector.call(handle); };
+    conn.on_data = function(data) { if(reader) {reader.call(handle, data);} };
+    conn.on_connect = function() { if(connector) {connector.call(handle);} };
     conn.tuple = tuple;
 
     conn.hsrc = this.router_mac;
@@ -534,8 +534,8 @@ WispNetworkAdapter.prototype.tcp_connect = function(dport)
     let handle = {
         write: function(data) { conn.write(data); },
         on: function(event, cb) {
-            if( event === "data" ) reader = cb;
-            if( event === "connect" ) connector = cb;
+            if( event === "data" ) {reader = cb;}
+            if( event === "connect" ) {connector = cb;}
         },
         close: function() { conn.close(); }
     };
@@ -557,15 +557,10 @@ WispNetworkAdapter.prototype.receive = function(data)
  */
 TCPConnection.prototype.on_data_wisp = async function(data) {
     if(data.length !== 0) {
-        sendWispFrame({
+        this.send_wisp_frame({
             type: "DATA",
-            streamID: this.streamID,
+            stream_id: this.stream_id,
             data: data
         });
     }
 };
-
-if(typeof module !== "undefined" && typeof module.exports !== "undefined")
-{
-    module.exports["WispNetworkAdapter"] = WispNetworkAdapter;
-}
