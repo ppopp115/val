@@ -1,5 +1,7 @@
 "use strict";
 
+const DOH_SERVER = "https://dns.google/resolve";
+
 /**
  * @constructor
  *
@@ -188,7 +190,7 @@ function validate_IP_address(ipaddress) {
 
 // DNS over HTTPS fetch, recursively fetch the A record until the first result is an IPv4
 async function dohdns(q) {
-    const req = await fetch(`https://dns.google/resolve?name=${q.name.join(".")}&type=${q.type}`,  {headers: [["accept", "application/dns-json"]]});
+    const req = await fetch(`${DOH_SERVER}?name=${q.name.join(".")}&type=${q.type}`, {headers: [["accept", "application/dns-json"]]});
     if(req.status === 200) {
         const res = await req.json();
         if(res.Answer) {
