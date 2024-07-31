@@ -306,6 +306,7 @@ devices-test: all-debug
 	./tests/devices/virtio_9p.js
 	./tests/devices/virtio_console.js
 	./tests/devices/fetch_network.js
+	./tests/devices/wisp_network.js
 
 rust-test: $(RUST_FILES)
 	env RUSTFLAGS="-D warnings" RUST_BACKTRACE=full RUST_TEST_THREADS=1 cargo test -- --nocapture
