@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --experimental-websocket
 "use strict";
 
 process.on("unhandledRejection", exn => { throw exn; });
