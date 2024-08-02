@@ -1066,7 +1066,7 @@ function arp_whohas(adapter, packet) {
     // Reply to ARP Whohas
     let reply = {};
     reply.eth = { ethertype: ETHERTYPE_ARP, src: adapter.router_mac, dest: packet.eth.src };
-    if (packet.arp.tpa.join(".") === "192.168.86.100") {
+    if(packet.arp.tpa.join(".") === "192.168.86.100") {
         reply.arp = {
             htype: 1,
             ptype: ETHERTYPE_IPV4,
