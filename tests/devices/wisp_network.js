@@ -248,12 +248,12 @@ function end_test()
 function finish_tests()
 {
     emulator.stop();
+    emulator.destroy();
 
     console.log("\nTests finished.");
     if(failed_tests.length === 0)
     {
         console.log("All tests passed");
-        process.exit(0);
     }
     else
     {

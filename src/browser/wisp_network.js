@@ -1,7 +1,5 @@
 "use strict";
 
-const DOH_SERVER = "https://dns.google/resolve";
-
 /**
  * @constructor
  *
@@ -147,9 +145,6 @@ function WispNetworkAdapter(wisp_url, bus, config)
         this.wispws.onmessage = (event) => {
             this.process_incoming_wisp_frame(new Uint8Array(event.data));
         };
-        this.wispws.onerror = () => {
-            register_ws();
-        };
         this.wispws.onclose = () => {
             register_ws();
         };
@@ -177,53 +172,11 @@ function WispNetworkAdapter(wisp_url, bus, config)
 
 WispNetworkAdapter.prototype.destroy = function()
 {
+    this.wispws.onmessage = null;
+    this.wispws.onclose = null;
     if(this.wispws)
         this.wispws.close();
 };
-
-// https://stackoverflow.com/questions/4460586/javascript-regular-expression-to-check-for-ip-addresses
-function validate_IP_address(ipaddress) {
-    return /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(ipaddress);
-}
-
-// DNS over HTTPS fetch, recursively fetch the A record until the first result is an IPv4
-async function dohdns(q) {
-    const req = await fetch(`${DOH_SERVER}?name=${q.name.join(".")}&type=${q.type}`, {headers: [["accept", "application/dns-json"]]});
-    if(req.status === 200) {
-        const res = await req.json();
-        if(res.Answer) {
-            if(validate_IP_address(res.Answer[0].data)) {
-                return res;
-            } else {
-                return await dohdns({name: res.Answer[0].data.split("."), type: q.type});
-            }
-        }
-        return { // if theres an error, Naively return localhost
-            "Status": 0,
-            "TC": false,
-            "RD": true,
-            "RA": true,
-            "AD": true,
-            "CD": false,
-            "Question": [
-                {
-                    "name": q.name.join("."),
-                    "type": 1
-                }
-            ],
-            "Answer": [
-                {
-                    "name": q.name.join("."),
-                    "type": 1,
-                    "TTL": 600,
-                    "data": "127.0.0.1"
-                }
-            ]
-        };
-    } else {
-        dbg_log("DNS Server returned error code: " + await req.text(), LOG_NET);
-    }
-}
 
 /**
  * @param {Uint8Array} data
@@ -299,28 +252,7 @@ WispNetworkAdapter.prototype.send = function(data)
     }
 
     if(packet.arp && packet.arp.oper === 1 && packet.arp.ptype === ETHERTYPE_IPV4) {
-        if(!this.masquerade) {
-            let packet_subnet = iptolong(packet.arp.tpa) & 0xFFFFFF00;
-            let router_subnet = iptolong(this.router_ip) & 0xFFFFFF00;
-
-            if(packet_subnet !== router_subnet) {
-                return;
-            }
-        }
-
-        // Reply to ARP Whohas
-        let reply = {};
-        reply.eth = { ethertype: ETHERTYPE_ARP, src: this.router_mac, dest: packet.eth.src };
-        reply.arp = {
-            htype: 1,
-            ptype: ETHERTYPE_IPV4,
-            oper: 2,
-            sha: this.router_mac,
-            spa: packet.arp.tpa,
-            tha: packet.eth.src,
-            tpa: packet.arp.spa
-        };
-        this.receive(make_packet(reply));
+        arp_whohas(this, packet);
 
     }
 
@@ -378,171 +310,24 @@ WispNetworkAdapter.prototype.send = function(data)
     }
 
     if(packet.ntp) {
-
-        let now = Date.now(); // - 1000 * 60 * 60 * 24 * 7;
-        let now_n = now + NTP_EPOC_DIFF;
-        let now_n_f = TWO_TO_32 * ((now_n % 1000) / 1000);
-
-        let reply = {};
-        reply.eth = { ethertype: ETHERTYPE_IPV4, src: this.router_mac, dest: packet.eth.src };
-        reply.ipv4 = {
-            proto: IPV4_PROTO_UDP,
-            src: packet.ipv4.dest,
-            dest: packet.ipv4.src,
-        };
-        reply.udp = { sport: 123, dport: packet.udp.sport };
-        let flags = (0 << 6) | (4 << 3) | 4;
-        reply.ntp = Object.assign({}, packet.ntp);
-        reply.ntp.flags = flags;
-        reply.ntp.poll = 10;
-        reply.ntp.ori_ts_i = packet.ntp.trans_ts_i;
-        reply.ntp.ori_ts_f = packet.ntp.trans_ts_f;
-
-        reply.ntp.rec_ts_i = now_n / 1000;
-        reply.ntp.rec_ts_f = now_n_f;
-
-        reply.ntp.trans_ts_i = now_n / 1000;
-        reply.ntp.trans_ts_f = now_n_f;
-
-        reply.ntp.stratum = 2;
-        this.receive(make_packet(reply));
+        ntp_response(this, packet);
         return;
     }
 
     // ICMP Ping
     if(packet.icmp && packet.icmp.type === 8) {
-        let reply = {};
-        reply.eth = { ethertype: ETHERTYPE_IPV4, src: this.router_mac, dest: packet.eth.src };
-        reply.ipv4 = {
-            proto: IPV4_PROTO_ICMP,
-            src: this.router_ip,
-            dest: packet.ipv4.src,
-        };
-        reply.icmp = {
-            type: 0,
-            code: packet.icmp.code,
-            data: packet.icmp.data
-        };
-        this.receive(make_packet(reply));
+        icmp_echo(this, packet);
         return;
     }
 
     if(packet.dhcp) {
-        let reply = {};
-        reply.eth = { ethertype: ETHERTYPE_IPV4, src: this.router_mac, dest: packet.eth.src };
-        reply.ipv4 = {
-            proto: IPV4_PROTO_UDP,
-            src: this.router_ip,
-            dest: this.vm_ip,
-        };
-        reply.udp = { sport: 67, dport: 68, };
-        reply.dhcp = {
-            htype: 1,
-            hlen: 6,
-            hops: 0,
-            xid: packet.dhcp.xid,
-            secs: 0,
-            flags: 0,
-            ciaddr: 0,
-            yiaddr: iptolong(this.vm_ip),
-            siaddr: iptolong(this.router_ip),
-            giaddr: iptolong(this.router_ip),
-            chaddr: packet.dhcp.chaddr,
-        };
-
-        let options = [];
-
-        // idk, it seems like op should be 3, but udhcpc sends 1
-        let fix = packet.dhcp.options.find(function(x) { return x[0] === 53; });
-        if( fix && fix[2] === 3 ) packet.dhcp.op = 3;
-
-        if(packet.dhcp.op === 1) {
-            reply.dhcp.op = 2;
-            options.push(new Uint8Array([53, 1, 2]));
-        }
-
-        if(packet.dhcp.op === 3) {
-            reply.dhcp.op = 2;
-            options.push(new Uint8Array([53, 1, 5]));
-            options.push(new Uint8Array([51, 4, 8, 0, 0, 0]));  // Lease Time
-        }
-
-        let router_ip = [this.router_ip[0], this.router_ip[1], this.router_ip[2], this.router_ip[3]];
-        options.push(new Uint8Array([1, 4, 255, 255, 255, 0])); // Netmask
-        if(this.masquerade) {
-            options.push(new Uint8Array([3, 4].concat(router_ip))); // Router
-            options.push(new Uint8Array([6, 4].concat(router_ip))); // DNS
-        }
-        options.push(new Uint8Array([54, 4].concat(router_ip))); // DHCP Server
-        options.push(new Uint8Array([60, 3].concat(V86_ASCII))); // Vendor
-        options.push(new Uint8Array([255, 0]));
-
-        reply.dhcp.options = options;
-        this.receive(make_packet(reply));
+        dhcp_response(this, packet);
         return;
     }
 
     if(packet.udp && packet.udp.dport === 8) {
-        // UDP Echo Server
-        let reply = {};
-        reply.eth = { ethertype: ETHERTYPE_IPV4, src: this.router_mac, dest: packet.eth.src };
-        reply.ipv4 = {
-            proto: IPV4_PROTO_UDP,
-            src: packet.ipv4.dest,
-            dest: packet.ipv4.src,
-        };
-        reply.udp = {
-            sport: packet.udp.dport,
-            dport: packet.udp.sport,
-            data: new TextEncoder().encode(packet.udp.data_s)
-        };
-        this.receive(make_packet(reply));
+        udp_echo(this, packet);
     }
-};
-
-
-WispNetworkAdapter.prototype.tcp_connect = function(dport)
-{
-    // TODO: check port collisions
-    let sport = 49152 + Math.floor(Math.random() * 1000);
-    let tuple = [
-        this.vm_ip.join("."),
-        dport,
-        this.router_ip.join("."),
-        sport
-    ].join(":");
-
-
-    let reader;
-    let connector;
-
-    let conn = new TCPConnection();
-    conn.net = this;
-    conn.on_data = function(data) { if(reader) {reader.call(handle, data);} };
-    conn.on_connect = function() { if(connector) {connector.call(handle);} };
-    conn.tuple = tuple;
-
-    conn.hsrc = this.router_mac;
-    conn.psrc = this.router_ip;
-    conn.sport = sport;
-    conn.hdest = this.vm_mac;
-    conn.dport = dport;
-    conn.pdest = this.vm_ip;
-
-    this.tcp_conn[tuple] = conn;
-    conn.connect();
-
-    // TODO: Real event source
-    let handle = {
-        write: function(data) { conn.write(data); },
-        on: function(event, cb) {
-            if( event === "data" ) {reader = cb;}
-            if( event === "connect" ) {connector = cb;}
-        },
-        close: function() { conn.close(); }
-    };
-
-    return handle;
 };
 
 /**
