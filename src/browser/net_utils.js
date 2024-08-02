@@ -981,14 +981,14 @@ function dhcp_response(adapter, packet) {
     let fix = packet.dhcp.options.find(function(x) { return x[0] === 53; });
     if( fix && fix[2] === 3 ) packet.dhcp.op = 3;
 
-    if(packet.dhcp.op === 1) {
+    if(packet.dhcp.op === 1) { // DHCPDISCOVER
         reply.dhcp.op = 2;
-        options.push(new Uint8Array([53, 1, 2]));
+        options.push(new Uint8Array([53, 1, 2])); // DHCP message type = 2 (DHCPOFFER)
     }
 
-    if(packet.dhcp.op === 3) {
+    if(packet.dhcp.op === 3) { // DHCPREQUEST
         reply.dhcp.op = 2;
-        options.push(new Uint8Array([53, 1, 5]));
+        options.push(new Uint8Array([53, 1, 5])); // DHCP message type = 5 (DHCPACK)
         options.push(new Uint8Array([51, 4, 8, 0, 0, 0]));  // Lease Time
     }
 
@@ -1067,14 +1067,27 @@ function arp_whohas(adapter, packet) {
     // Reply to ARP Whohas
     let reply = {};
     reply.eth = { ethertype: ETHERTYPE_ARP, src: adapter.router_mac, dest: packet.eth.src };
-    reply.arp = {
-        htype: 1,
-        ptype: ETHERTYPE_IPV4,
-        oper: 2,
-        sha: adapter.router_mac,
-        spa: packet.arp.tpa,
-        tha: packet.eth.src,
-        tpa: packet.arp.spa
-    };
+    if (packet.arp.tpa.join(".") === "192.168.86.100") {
+        reply.arp = {
+            htype: 1,
+            ptype: ETHERTYPE_IPV4,
+            oper: 2,
+            sha: packet.eth.src, // Say the IP already belongs to them
+            spa: packet.arp.tpa,
+            tha: packet.eth.src,
+            tpa: packet.arp.spa
+        };
+    } else {
+        reply.arp = {
+            htype: 1,
+            ptype: ETHERTYPE_IPV4,
+            oper: 2,
+            sha: adapter.router_mac, // Say the IP belongs to the router
+            spa: packet.arp.tpa,
+            tha: packet.eth.src,
+            tpa: packet.arp.spa
+        };
+    }
+
     adapter.receive(make_packet(reply));
 }
