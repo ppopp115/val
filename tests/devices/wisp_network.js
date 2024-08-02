@@ -253,6 +253,7 @@ function finish_tests()
     if(failed_tests.length === 0)
     {
         console.log("All tests passed");
+        process.exit(0);
     }
     else
     {
