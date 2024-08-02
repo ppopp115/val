@@ -62,6 +62,7 @@ function WispNetworkAdapter(wisp_url, bus, config)
                 delete this.connections[stream_id];
                 break;
             case 5: // PROTOEXT
+                dbg_log("got a wisp V2 upgrade request, ignoring", LOG_NET);
                 // Not responding, this is wisp v1 client not wisp v2;
                 break;
             default:
