@@ -951,7 +951,6 @@ function udp_echo(adapter, packet) {
     adapter.receive(make_packet(reply));
 }
 
-// TODO: Fix for #1091? DHCPCD fails, udhcp seems to be the only one that works
 function dhcp_response(adapter, packet) {
     let reply = {};
     reply.eth = { ethertype: ETHERTYPE_IPV4, src: adapter.router_mac, dest: packet.eth.src };
