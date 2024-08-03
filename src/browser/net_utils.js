@@ -1067,15 +1067,7 @@ function arp_whohas(adapter, packet) {
     let reply = {};
     reply.eth = { ethertype: ETHERTYPE_ARP, src: adapter.router_mac, dest: packet.eth.src };
     if(packet.arp.tpa.join(".") === "192.168.86.100") {
-        reply.arp = {
-            htype: 1,
-            ptype: ETHERTYPE_IPV4,
-            oper: 2,
-            sha: packet.eth.src, // Say the IP already belongs to them
-            spa: packet.arp.tpa,
-            tha: packet.eth.src,
-            tpa: packet.arp.spa
-        };
+        return; // Since there isn't much reason to ARP for your own IP except duplicate address detection, just ignore the arp
     } else {
         reply.arp = {
             htype: 1,
